@@ -1,0 +1,12 @@
+# Installed npm dependencies
+node_modules/
+
+# Generated builds
+dist/
+
+# Logs
+*.log
+
+# Local environment files
+.env
+.env.local
