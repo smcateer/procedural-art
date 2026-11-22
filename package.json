@@ -11,5 +11,8 @@
   "license": "ISC",
   "devDependencies": {
     "fragment-tools": "^0.2.16"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
   }
 }
