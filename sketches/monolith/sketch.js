@@ -103,6 +103,11 @@ export let buildConfig = {
     resizing: "window",
     pixelRatio: 1,
     backgroundColor: "#000000",
+    // Remove Fragment's intrinsic 500px canvas cap in a headless iframe.
+    styles: `
+        .sketch-renderer.svelte-1lyfnr1 {background:#000!important;}
+        .canvas-container.svelte-1lyfnr1 {width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;}
+    `,
     gui: false,
     layout: {
         headless: true,
