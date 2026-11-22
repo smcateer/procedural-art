@@ -4,17 +4,32 @@ import { RigidCuboid } from "./rigid-body.js";
 
 export let rendering = "three";
 
+export let buildConfig = {
+    dimensions: [500, 500],
+    resizing: "fixed",
+    pixelRatio: 1,
+};
+
+const ORTHOGRAPHIC_VIEW_HEIGHT = 14;
+
+let bodyNeedsReset = false;
+
+const resetBody = () => {
+    bodyNeedsReset = true;
+};
+
 // Fragment GUI controls
 export let props = {
-  width:  { value: 1.0, params: { min: 0.2, max: 4, step: 0.1 } },
-  height: { value: 1.5, params: { min: 0.2, max: 4, step: 0.1 } },
-  depth:  { value: 2.0, params: { min: 0.2, max: 4, step: 0.1 } },
-
-  wx: { value: 0.1, params: { min: -6, max: 6, step: 0.1 } },
-  wy: { value: 4.0, params: { min: -6, max: 6, step: 0.1 } },
-  wz: { value: 0.1, params: { min: -6, max: 6, step: 0.1 } },
-
-  speed: { value: 1, params: { min: 0, max: 3, step: 0.1 } },
+    // Cuboid dimensions
+    width:  { value: 0.4, params: { min: 0.2, max: 10, step: 0.1 }, onChange: resetBody },
+    height: { value: 8.9, params: { min: 0.2, max: 10, step: 0.1 }, onChange: resetBody },
+    depth:  { value: 4.9, params: { min: 0.2, max: 10, step: 0.1 }, onChange: resetBody },
+    // Initial angular velocity components
+    wx: { value: 0.05, params: { min: -6, max: 6, step: 0.1 }, onChange: resetBody },
+    wy: { value: 0.1, params: { min: -6, max: 6, step: 0.1 }, onChange: resetBody },
+    wz: { value: -5.0, params: { min: -6, max: 6, step: 0.1 }, onChange: resetBody },
+    // Simulation speed
+    speed: { value: 0.2, params: { min: 0, max: 3, step: 0.1 } },
 };
 
 let camera;
@@ -23,90 +38,114 @@ let body;
 let elapsed = 0;
 
 function createBody(scene) {
-  if (mesh) {
-    scene.remove(mesh);
-    mesh.geometry.dispose();
-    mesh.material.dispose();
-  }
+    if (mesh) {
+        scene.remove(mesh);
+        mesh.traverse((object) => {
+            object.geometry?.dispose();
 
-  const a = props.width.value;
-  const b = props.height.value;
-  const c = props.depth.value;
+            const materials = Array.isArray(object.material)
+                ? object.material
+                : [object.material];
 
-  body = new RigidCuboid({
-    width: a,
-    height: b,
-    depth: c,
-    omega: [
-      props.wx.value,
-      props.wy.value,
-      props.wz.value,
-    ],
-  });
+            materials.forEach(material => material?.dispose());
+        });
+    }
 
-  const geometry = new THREE.BoxGeometry(a, b, c);
+    const a = props.width.value;
+    const b = props.height.value;
+    const c = props.depth.value;
 
-  // Different colours on each pair of faces
-  const colours = [
-    0xe76f51, 0xe76f51,
-    0x2a9d8f, 0x2a9d8f,
-    0xe9c46a, 0xe9c46a,
-  ];
+    body = new RigidCuboid({
+        width: a,
+        height: b,
+        depth: c,
+        omega: [
+            props.wx.value,
+            props.wy.value,
+            props.wz.value,
+        ],
+    });
 
-  const materials = colours.map(color =>
-    new THREE.MeshBasicMaterial({
-      color,
-      side: THREE.DoubleSide,
-    })
-  );
+    const geometry = new THREE.BoxGeometry(a, b, c);
 
-  mesh = new THREE.Mesh(geometry, materials);
-  scene.add(mesh);
+    // Different colours on each pair of faces
+    const colours = [
+        0x000000, 0x000000,
+        0xffffff, 0xffffff,
+        0xffffff, 0xffffff,
+    ];
 
-  // Black outlines to make orientation obvious
-  const edges = new THREE.LineSegments(
-    new THREE.EdgesGeometry(geometry),
-    new THREE.LineBasicMaterial({ color: 0x111111 })
-  );
-  mesh.add(edges);
+    const materials = colours.map(color =>
+        new THREE.MeshBasicMaterial({
+            color,
+            side: THREE.DoubleSide,
+        })
+    );
+
+    mesh = new THREE.Mesh(geometry, materials);
+    scene.add(mesh);
+
+    // Black outlines to make orientation obvious
+    // const edges = new THREE.LineSegments(
+    //     new THREE.EdgesGeometry(geometry),
+    //     new THREE.LineBasicMaterial({ color: 0xffffff })
+    // );
+    // mesh.add(edges);
+    bodyNeedsReset = false;
+    elapsed = 0;
+}
+
+function updateCameraProjection(width, height) {
+    const halfHeight = ORTHOGRAPHIC_VIEW_HEIGHT / 2;
+    const halfWidth = halfHeight * width / height;
+
+    camera.left = -halfWidth;
+    camera.right = halfWidth;
+    camera.top = halfHeight;
+    camera.bottom = -halfHeight;
+    camera.updateProjectionMatrix();
 }
 
 export let init = ({ scene, width, height }) => {
-  scene.background = new THREE.Color(0x101820);
+    scene.background = new THREE.Color(0x000000);
 
-  camera = new THREE.PerspectiveCamera(
-    45,
-    width / height,
-    0.1,
-    100
-  );
+    camera = new THREE.OrthographicCamera(
+        -1,
+        1,
+        1,
+        -1,
+        0.1,
+        100
+    );
 
-  camera.position.set(4, 3, 6);
-  camera.lookAt(0, 0, 0);
+    updateCameraProjection(width, height);
+    camera.position.set(16, 12, 24);
+    camera.lookAt(0, 0, 0);
 
-  createBody(scene);
-  elapsed = 0;
+    createBody(scene);
+    elapsed = 0;
 };
 
 export let update = ({ renderer, scene }) => {
-  // Fixed simulated time per rendered frame.
-  // Four RK4 substeps improve numerical accuracy.
-  const dt = props.speed.value / 240;
+    if (bodyNeedsReset) createBody(scene);
 
-  for (let i = 0; i < 4; i++) {
-    if (dt > 0) body.step(dt);
-  }
+    // Fixed simulated time per rendered frame.
+    // Four RK4 substeps improve numerical accuracy.
+    const dt = props.speed.value / 240;
 
-  elapsed += dt * 4;
+    for (let i = 0; i < 4; i++) {
+        if (dt > 0) body.step(dt);
+    }
 
-  // Apply body-to-world quaternion
-  const [w, x, y, z] = body.quaternion;
-  mesh.quaternion.set(x, y, z, w);
+    elapsed += dt * 4;
 
-  renderer.render(scene, camera);
+    // Apply body-to-world quaternion
+    const [w, x, y, z] = body.quaternion;
+    mesh.quaternion.set(x, y, z, w);
+
+    renderer.render(scene, camera);
 };
 
 export let resize = ({ width, height }) => {
-  camera.aspect = width / height;
-  camera.updateProjectionMatrix();
+    updateCameraProjection(width, height);
 };
