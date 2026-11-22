@@ -98,9 +98,11 @@ function advanceArtwork(frameSeconds) {
 export let rendering = "three";
 
 export let buildConfig = {
-    dimensions: [500, 500],
-    resizing: "fixed",
+    // Size the canvas to the viewport (including a portfolio iframe).
+    // The surrounding page controls the display aspect ratio.
+    resizing: "window",
     pixelRatio: 1,
+    backgroundColor: "#000000",
     gui: false,
     layout: {
         headless: true,
