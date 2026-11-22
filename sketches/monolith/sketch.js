@@ -102,6 +102,10 @@ export let buildConfig = {
     resizing: "fixed",
     pixelRatio: 1,
     gui: false,
+    layout: {
+        headless: true,
+        resizable: false,
+    },
 };
 
 const MAX_FRAME_DELTA = 0.25;
