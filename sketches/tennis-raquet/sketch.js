@@ -1,64 +1,62 @@
-
 import * as THREE from "three";
 import { RigidCuboid } from "./rigid-body.js";
 
-export let rendering = "three";
+// =============================================================================
+// ARTWORK DESCRIPTION
+// Shape, appearance, initial motion, and the animation itself live here.
+// =============================================================================
 
-export let buildConfig = {
-    dimensions: [500, 500],
-    resizing: "fixed",
-    pixelRatio: 1,
-};
-
+// Composition and appearance
+const BACKGROUND_COLOUR = 0x000000;
+const FACE_COLOURS = [
+    0x000000, 0x000000,
+    0xffffff, 0xffffff,
+    0xffffff, 0xffffff,
+];
+const CAMERA_POSITION = [16, 12, 24];
 const ORTHOGRAPHIC_VIEW_HEIGHT = 14;
 
-let bodyNeedsReset = false;
+// The equations of motion are integrated at a fixed 240 Hz.
+const PHYSICS_STEP = 1 / 240;
+const STEP_EPSILON = PHYSICS_STEP * 1e-9;
 
-const resetBody = () => {
-    bodyNeedsReset = true;
-};
-
-// Fragment GUI controls
+// Artwork controls exposed in Fragment's interactive GUI.
 export let props = {
     // Cuboid dimensions
-    width:  { value: 0.4, params: { min: 0.2, max: 10, step: 0.1 }, onChange: resetBody },
-    height: { value: 8.9, params: { min: 0.2, max: 10, step: 0.1 }, onChange: resetBody },
-    depth:  { value: 4.9, params: { min: 0.2, max: 10, step: 0.1 }, onChange: resetBody },
-    // Initial angular velocity components
-    wx: { value: 0.05, params: { min: -6, max: 6, step: 0.1 }, onChange: resetBody },
-    wy: { value: 0.1, params: { min: -6, max: 6, step: 0.1 }, onChange: resetBody },
-    wz: { value: -5.0, params: { min: -6, max: 6, step: 0.1 }, onChange: resetBody },
-    // Simulation speed
+    width:  { value: 0.4, params: { min: 0.2, max: 10, step: 0.1 }, onChange: requestArtworkReset },
+    height: { value: 8.9, params: { min: 0.2, max: 10, step: 0.1 }, onChange: requestArtworkReset },
+    depth:  { value: 4.9, params: { min: 0.2, max: 10, step: 0.1 }, onChange: requestArtworkReset },
+
+    // Initial body-frame angular velocity
+    wx: { value: 0.05, params: { min: -6, max: 6, step: 0.1 }, onChange: requestArtworkReset },
+    wy: { value: 0.1, params: { min: -6, max: 6, step: 0.1 }, onChange: requestArtworkReset },
+    wz: { value: -5.0, params: { min: -6, max: 6, step: 0.1 }, onChange: requestArtworkReset },
+
+    // Simulated seconds per real second
     speed: { value: 0.2, params: { min: 0, max: 3, step: 0.1 } },
+
+    // Fragment diagnostic; not part of the artwork.
+    measuredFps: {
+        value: 0,
+        params: { step: 1, suffix: " fps" },
+        displayName: "measured FPS",
+        disabled: true,
+    },
 };
 
-let camera;
-let mesh;
 let body;
-let elapsed = 0;
+let mesh;
+let accumulatedTime = 0;
 
-function createBody(scene) {
-    if (mesh) {
-        scene.remove(mesh);
-        mesh.traverse((object) => {
-            object.geometry?.dispose();
-
-            const materials = Array.isArray(object.material)
-                ? object.material
-                : [object.material];
-
-            materials.forEach(material => material?.dispose());
-        });
-    }
-
-    const a = props.width.value;
-    const b = props.height.value;
-    const c = props.depth.value;
+function createArtwork() {
+    const width = props.width.value;
+    const height = props.height.value;
+    const depth = props.depth.value;
 
     body = new RigidCuboid({
-        width: a,
-        height: b,
-        depth: c,
+        width,
+        height,
+        depth,
         omega: [
             props.wx.value,
             props.wy.value,
@@ -66,16 +64,8 @@ function createBody(scene) {
         ],
     });
 
-    const geometry = new THREE.BoxGeometry(a, b, c);
-
-    // Different colours on each pair of faces
-    const colours = [
-        0x000000, 0x000000,
-        0xffffff, 0xffffff,
-        0xffffff, 0xffffff,
-    ];
-
-    const materials = colours.map(color =>
+    const geometry = new THREE.BoxGeometry(width, height, depth);
+    const materials = FACE_COLOURS.map(color =>
         new THREE.MeshBasicMaterial({
             color,
             side: THREE.DoubleSide,
@@ -83,16 +73,97 @@ function createBody(scene) {
     );
 
     mesh = new THREE.Mesh(geometry, materials);
-    scene.add(mesh);
+    accumulatedTime = 0;
+}
 
-    // Black outlines to make orientation obvious
-    // const edges = new THREE.LineSegments(
-    //     new THREE.EdgesGeometry(geometry),
-    //     new THREE.LineBasicMaterial({ color: 0xffffff })
-    // );
-    // mesh.add(edges);
-    bodyNeedsReset = false;
-    elapsed = 0;
+function advanceArtwork(frameSeconds) {
+    accumulatedTime += frameSeconds * props.speed.value;
+
+    const stepCount = Math.floor(
+        (accumulatedTime + STEP_EPSILON) / PHYSICS_STEP
+    );
+
+    for (let i = 0; i < stepCount; i++) {
+        body.step(PHYSICS_STEP);
+    }
+
+    accumulatedTime -= stepCount * PHYSICS_STEP;
+}
+
+// =============================================================================
+// FRAGMENT, PAGE, AND RENDERING SUPPORT
+// Readers interested only in the artwork can skip the remainder of this file.
+// =============================================================================
+
+export let rendering = "three";
+
+export let buildConfig = {
+    dimensions: [500, 500],
+    resizing: "fixed",
+    pixelRatio: 1,
+    gui: false,
+};
+
+const MAX_FRAME_DELTA = 0.25;
+const FPS_SAMPLE_DURATION = 500;
+
+let camera;
+let artworkNeedsReset = false;
+let pageVisible = typeof document === "undefined" || !document.hidden;
+let discardNextDelta = false;
+let fpsSampleElapsed = 0;
+let fpsSampleFrames = 0;
+
+function requestArtworkReset() {
+    artworkNeedsReset = true;
+}
+
+function disposeObject3D(object) {
+    object.traverse((child) => {
+        child.geometry?.dispose();
+
+        const materials = Array.isArray(child.material)
+            ? child.material
+            : [child.material];
+
+        materials.forEach(material => material?.dispose());
+    });
+}
+
+function replaceArtwork(scene) {
+    if (mesh) {
+        scene.remove(mesh);
+        disposeObject3D(mesh);
+    }
+
+    createArtwork();
+    scene.add(mesh);
+    artworkNeedsReset = false;
+}
+
+function handleVisibilityChange() {
+    pageVisible = !document.hidden;
+    accumulatedTime = 0;
+    discardNextDelta = pageVisible;
+    fpsSampleElapsed = 0;
+    fpsSampleFrames = 0;
+
+    if (!pageVisible) props.measuredFps.value = 0;
+}
+
+function measureFrameRate(deltaTime) {
+    if (!(deltaTime > 0)) return;
+
+    fpsSampleElapsed += deltaTime;
+    fpsSampleFrames++;
+
+    if (fpsSampleElapsed >= FPS_SAMPLE_DURATION) {
+        props.measuredFps.value = Math.round(
+            fpsSampleFrames * 1000 / fpsSampleElapsed
+        );
+        fpsSampleElapsed = 0;
+        fpsSampleFrames = 0;
+    }
 }
 
 function updateCameraProjection(width, height) {
@@ -107,45 +178,58 @@ function updateCameraProjection(width, height) {
 }
 
 export let init = ({ scene, width, height }) => {
-    scene.background = new THREE.Color(0x000000);
-
-    camera = new THREE.OrthographicCamera(
-        -1,
-        1,
-        1,
-        -1,
-        0.1,
-        100
-    );
-
+    // RENDERING SETUP
+    scene.background = new THREE.Color(BACKGROUND_COLOUR);
+    camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
     updateCameraProjection(width, height);
-    camera.position.set(16, 12, 24);
+    camera.position.set(...CAMERA_POSITION);
     camera.lookAt(0, 0, 0);
 
-    createBody(scene);
-    elapsed = 0;
+    // ARTWORK SETUP
+    replaceArtwork(scene);
+
+    // PAGE LIFECYCLE
+    if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        pageVisible = !document.hidden;
+        discardNextDelta = true;
+    }
 };
 
-export let update = ({ renderer, scene }) => {
-    if (bodyNeedsReset) createBody(scene);
+export let update = ({ renderer, scene, deltaTime }) => {
+    // FRAGMENT GUI AND PAGE LIFECYCLE
+    if (artworkNeedsReset) replaceArtwork(scene);
+    if (!pageVisible) return;
 
-    // Fixed simulated time per rendered frame.
-    // Four RK4 substeps improve numerical accuracy.
-    const dt = props.speed.value / 240;
+    const elapsedMilliseconds = Number.isFinite(deltaTime) ? deltaTime : 0;
 
-    for (let i = 0; i < 4; i++) {
-        if (dt > 0) body.step(dt);
+    if (discardNextDelta) {
+        discardNextDelta = false;
+    } else {
+        // FRAGMENT DIAGNOSTIC
+        measureFrameRate(elapsedMilliseconds);
+
+        // ARTWORK ANIMATION
+        const frameSeconds = Math.min(
+            Math.max(elapsedMilliseconds, 0) / 1000,
+            MAX_FRAME_DELTA
+        );
+        advanceArtwork(frameSeconds);
     }
 
-    elapsed += dt * 4;
-
-    // Apply body-to-world quaternion
+    // THREE.JS RENDERING BRIDGE
     const [w, x, y, z] = body.quaternion;
     mesh.quaternion.set(x, y, z, w);
-
     renderer.render(scene, camera);
 };
 
 export let resize = ({ width, height }) => {
     updateCameraProjection(width, height);
+};
+
+export let dispose = () => {
+    if (typeof document !== "undefined") {
+        document.removeEventListener("visibilitychange", handleVisibilityChange);
+    }
 };
